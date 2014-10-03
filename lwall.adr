@@ -1,0 +1,21 @@
+/***** infovax:comp.sources.b / devvax!lwall / 12:50 am  Jun  4, 1988*/
+System: patch version 2.0
+
+If you are missing previous patches they can be obtained from me:
+
+Larry Wall
+lwall@jpl-devvax.jpl.nasa.gov
+
+If you send a mail message of the following form it will greatly speed
+processing:
+
+Subject: Command
+@SH mailpatch PATH patch 2.0 LIST
+	   ^ note the c
+
+where PATH is a return path FROM ME TO YOU in Internet notation, and
+LIST is the number of one or more patches you need, separated by spaces,
+commas, and/or hyphens.  Saying 35- says everything from 35 to the end.
+
+You can also get the patches via anonymous FTP from
+jpl-devvax.jpl.nasa.gov (128.149.8.43).

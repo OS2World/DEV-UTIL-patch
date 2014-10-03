@@ -1,0 +1,1615 @@
+Only in patch2u: config.h
+Only in patch2u: isvalid.c
+Only in patch2u: patch.cs
+Only in patch2u: patch.def
+Only in patch2u: patches.os2
+diff -cbBw orig/common.h patch2u/common.h
+*** orig/common.h	Mon Feb 18 18:55:30 1991
+--- patch2u/common.h	Mon Feb 18 19:46:34 1991
+***************
+*** 38,43 ****
+--- 38,45 ----
+  #include <sys/stat.h>
+  #include <ctype.h>
+  #include <signal.h>
++ #include <io.h>
++ #include <fcntl.h>
+  
+  /* constants */
+  
+***************
+*** 110,119 ****
+  EXT char *origext INIT(Nullch);
+  EXT char *origprae INIT(Nullch);
+  
+! EXT char TMPOUTNAME[] INIT("/tmp/patchoXXXXXX");
+! EXT char TMPINNAME[] INIT("/tmp/patchiXXXXXX");	/* might want /usr/tmp here */
+! EXT char TMPREJNAME[] INIT("/tmp/patchrXXXXXX");
+! EXT char TMPPATNAME[] INIT("/tmp/patchpXXXXXX");
+  EXT bool toutkeep INIT(FALSE);
+  EXT bool trejkeep INIT(FALSE);
+  
+--- 112,122 ----
+  EXT char *origext INIT(Nullch);
+  EXT char *origprae INIT(Nullch);
+  
+! EXT char *TMPOUTNAME;
+! EXT char *TMPINNAME;
+! EXT char *TMPREJNAME;
+! EXT char *TMPPATNAME;
+! 
+  EXT bool toutkeep INIT(FALSE);
+  EXT bool trejkeep INIT(FALSE);
+  
+***************
+*** 134,139 ****
+--- 137,143 ----
+  #define NORMAL_DIFF 2
+  #define ED_DIFF 3
+  #define NEW_CONTEXT_DIFF 4
++ #define UNI_DIFF 5
+  EXT int diff_type INIT(0);
+  
+  EXT bool do_defines INIT(FALSE);	/* patch using ifdef, ifndef, etc. */
+***************
+*** 144,158 ****
+  
+  EXT char *revision INIT(Nullch);	/* prerequisite revision, if any */
+  
+! char *malloc();
+! char *realloc();
+  char *strcpy();
+  char *strcat();
+  long atol();
+  long lseek();
+  char *mktemp();
+  #ifdef CHARSPRINTF
+  char *sprintf();
+  #else
+  int sprintf();
+  #endif
+--- 148,168 ----
+  
+  EXT char *revision INIT(Nullch);	/* prerequisite revision, if any */
+  
+! void *malloc();
+! void *realloc();
+  char *strcpy();
+  char *strcat();
+  long atol();
+  long lseek();
+  char *mktemp();
++ 
++ #ifdef MSDOS
++ #undef stderr
++ FILE *stderr;
++ #endif
+  #ifdef CHARSPRINTF
+  char *sprintf();
+  #else
+  int sprintf();
+  #endif
++ char *getenv();
+diff -cbBw orig/inp.c patch2u/inp.c
+*** orig/inp.c	Mon Feb 18 18:55:34 1991
+--- patch2u/inp.c	Mon Feb 18 19:00:46 1991
+***************
+*** 79,84 ****
+--- 79,87 ----
+      int ifd;
+      Reg1 char *s;
+      Reg2 LINENUM iline;
++ #ifdef MSDOS
++     int i_res;
++ #endif
+  
+      if (ok_to_create_file && stat(filename, &filestat) < 0) {
+  	if (verbose)
+***************
+*** 115,120 ****
+--- 118,127 ----
+      if ((filemode & S_IFMT) & ~S_IFREG)
+  	fatal2("%s is not a normal file--can't patch.\n", filename);
+      i_size = filestat.st_size;
++ #ifdef MSDOS
++     if ( i_size > 65500L )
++       return FALSE;
++ #endif
+      if (out_of_mem) {
+  	set_hunkmax();		/* make sure dynamic arrays are allocated */
+  	out_of_mem = FALSE;
+***************
+*** 128,136 ****
+  #endif
+      if (i_womp == Nullch)
+  	return FALSE;
+!     if ((ifd = open(filename, 0)) < 0)
+  	fatal2("Can't open file %s\n", filename);
+  #ifndef lint
+      if (read(ifd, i_womp, (int)i_size) != i_size) {
+  	Close(ifd);	/* probably means i_size > 15 or 16 bits worth */
+  	free(i_womp);	/* at this point it doesn't matter if i_womp was */
+--- 135,154 ----
+  #endif
+      if (i_womp == Nullch)
+  	return FALSE;
+!     if ((ifd = open(filename, O_BINARY)) < 0)
+  	fatal2("Can't open file %s\n", filename);
+  #ifndef lint
++ #ifdef DUMMY_MSDOS
++     /* this hack is now obsolete in binary mode */
++     if ((i_res = read(ifd, i_womp, (int)i_size)) == -1) {
++ 	Close(ifd);	/* probably means i_size > 15 or 16 bits worth */
++ 	free(i_womp);	/* at this point it doesn't matter if i_womp was */
++ 	return FALSE;	/*   undersized. */
++     }
++     else
++       /* cr/lf-translations would bomb here (i_res is != file size)! */
++       i_size = i_res;
++ #else
+      if (read(ifd, i_womp, (int)i_size) != i_size) {
+  	Close(ifd);	/* probably means i_size > 15 or 16 bits worth */
+  	free(i_womp);	/* at this point it doesn't matter if i_womp was */
+***************
+*** 137,142 ****
+--- 155,161 ----
+  	return FALSE;	/*   undersized. */
+      }
+  #endif
++ #endif
+      Close(ifd);
+      if (i_size && i_womp[i_size-1] != '\n')
+  	i_womp[i_size++] = '\n';
+***************
+*** 206,214 ****
+      Reg4 bool found_revision = (revision == Nullch);
+  
+      using_plan_a = FALSE;
+!     if ((ifp = fopen(filename, "r")) == Nullfp)
+  	fatal2("Can't open file %s\n", filename);
+!     if ((tifd = creat(TMPINNAME, 0666)) < 0)
+  	fatal2("Can't open file %s\n", TMPINNAME);
+      while (fgets(buf, sizeof buf, ifp) != Nullch) {
+  	if (revision != Nullch && !found_revision && rev_in_string(buf))
+--- 225,234 ----
+      Reg4 bool found_revision = (revision == Nullch);
+  
+      using_plan_a = FALSE;
+!     if ((ifp = fopen(filename, "rb")) == Nullfp)
+  	fatal2("Can't open file %s\n", filename);
+!     if ((tifd = open(TMPINNAME, O_WRONLY|O_CREAT|O_TRUNC|O_BINARY,
+!                      S_IWRITE|S_IREAD)) < 0)
+  	fatal2("Can't open file %s\n", TMPINNAME);
+      while (fgets(buf, sizeof buf, ifp) != Nullch) {
+  	if (revision != Nullch && !found_revision && rev_in_string(buf))
+***************
+*** 236,242 ****
+  	    say2("Good.  This file appears to be the %s version.\n",
+  		revision);
+      }
+!     Fseek(ifp, 0L, 0);		/* rewind file */
+      lines_per_buf = BUFFERSIZE / maxlen;
+      tireclen = maxlen;
+      tibuf[0] = malloc((MEM)(BUFFERSIZE + 1));
+--- 256,262 ----
+  	    say2("Good.  This file appears to be the %s version.\n",
+  		revision);
+      }
+!     rewind(ifp);          /* rewind file */
+      lines_per_buf = BUFFERSIZE / maxlen;
+      tireclen = maxlen;
+      tibuf[0] = malloc((MEM)(BUFFERSIZE + 1));
+***************
+*** 258,264 ****
+      }
+      Fclose(ifp);
+      Close(tifd);
+!     if ((tifd = open(TMPINNAME, 0)) < 0) {
+  	fatal2("Can't reopen file %s\n", TMPINNAME);
+      }
+  }
+--- 278,285 ----
+      }
+      Fclose(ifp);
+      Close(tifd);
+! 
+!     if ((tifd = open(TMPINNAME, O_RDONLY|O_BINARY)) < 0) {
+  	fatal2("Can't reopen file %s\n", TMPINNAME);
+      }
+  }
+***************
+*** 306,312 ****
+      if (revision == Nullch)
+  	return TRUE;
+      patlen = strlen(revision);
+!     if (strnEQ(string,revision,patlen) && isspace(s[patlen]))
+  	return TRUE;
+      for (s = string; *s; s++) {
+  	if (isspace(*s) && strnEQ(s+1, revision, patlen) &&
+--- 327,333 ----
+      if (revision == Nullch)
+  	return TRUE;
+      patlen = strlen(revision);
+!     if (strnEQ(string,revision,patlen) && isspace(string[patlen]))
+  	return TRUE;
+      for (s = string; *s; s++) {
+  	if (isspace(*s) && strnEQ(s+1, revision, patlen) &&
+diff -cbBw orig/patch.c patch2u/patch.c
+*** orig/patch.c	Mon Feb 18 18:55:38 1991
+--- patch2u/patch.c	Mon Feb 18 19:15:32 1991
+***************
+*** 1,5 ****
+  char rcsid[] =
+! 	"$Header: patch.c,v 2.0.1.6 88/06/22 20:46:39 lwall Locked $";
+  
+  /* patch - a program to apply diffs to original files
+   *
+--- 1,5 ----
+  char rcsid[] =
+! 	"$Header: patch.c,v 2.0.2.0 90/05/01 22:17:50 davison Locked $";
+  
+  /* patch - a program to apply diffs to original files
+   *
+***************
+*** 9,14 ****
+--- 9,17 ----
+   * money off of it, or pretend that you wrote it.
+   *
+   * $Log:	patch.c,v $
++  * Revision 2.0.2.0  90/05/01  22:17:50  davison
++  * patch12u: unidiff support added
++  *
+   * Revision 2.0.1.6  88/06/22  20:46:39  lwall
+   * patch12: rindex() wasn't declared
+   *
+***************
+*** 94,99 ****
+--- 97,103 ----
+  #include "util.h"
+  #include "pch.h"
+  #include "inp.h"
++ #include "patchlev.h"
+  
+  /* procedures */
+  
+***************
+*** 111,116 ****
+--- 115,128 ----
+  bool similar();
+  void re_input();
+  void my_exit();
++ char *strchr();
++ char *strrchr();
++ 
++ /* Nonzero if -R was specified on command line.  */
++ static int reverse_flag_specified = FALSE;
++ 
++ /* Program name */
++ static char *myname;
+  
+  /* Apply a set of diffs as appropriate. */
+  
+***************
+*** 126,143 ****
+--- 138,194 ----
+      int failed = 0;
+      int failtotal = 0;
+      int i;
++     char *s;
+  
++ #ifdef MSDOS
++     stderr = fopen("con", "w");
++ #endif
+      setbuf(stderr, serrbuf);
++ 
+      for (i = 0; i<MAXFILEC; i++)
+  	filearg[i] = Nullch;
++ 
++     /* Cons up the names of the temporary files.  */
++     {
++       /* Directory for temporary files.  */
++       char *tmpdir;
++       int tmpname_len;
++ 
++ #ifdef MSDOS
++       tmpdir = getenv ("TMP");
++ #else
++       tmpdir = getenv ("TMPDIR");
++ #endif
++       if (tmpdir == NULL) {
++ 	tmpdir = "/tmp";
++       }
++       tmpname_len = strlen (tmpdir) + 20;
++ 
++       TMPOUTNAME = (char *) malloc (tmpname_len);
++       strcpy (TMPOUTNAME, tmpdir);
++       strcat (TMPOUTNAME, "/poXXXXXX");
+        Mktemp(TMPOUTNAME);
++ 
++       TMPINNAME = (char *) malloc (tmpname_len);
++       strcpy (TMPINNAME, tmpdir);
++       strcat (TMPINNAME, "/piXXXXXX");
+        Mktemp(TMPINNAME);
++ 
++       TMPREJNAME = (char *) malloc (tmpname_len);
++       strcpy (TMPREJNAME, tmpdir);
++       strcat (TMPREJNAME, "/prXXXXXX");
+        Mktemp(TMPREJNAME);
++ 
++       TMPPATNAME = (char *) malloc (tmpname_len);
++       strcpy (TMPPATNAME, tmpdir);
++       strcat (TMPPATNAME, "/ppXXXXXX");
+        Mktemp(TMPPATNAME);
++     }
+  
+      /* parse switches */
+      Argc = argc;
+      Argv = argv;
++     myname = argv[0];
+      get_some_switches();
+   
+      /* make sure we clean up /tmp in case of disaster */
+***************
+*** 302,308 ****
+--- 353,373 ----
+  			s[13] = '\0';
+                  }
+  #endif
++ #ifdef MSDOS
++                 s = strchr(rejname, 0);
++ #endif
+  		Strcat(rejname, REJEXT);
++ #ifdef MSDOS
++                 if ( !IsFileNameValid(rejname) )
++                 {
++                   *s=0;
++ 
++                   if ((s=strrchr(rejname,'.'))!=NULL)
++                     *s=0;
++ 
++                   strcat(rejname, ".rej");
++                 }
++ #endif
+  	    }
+  	    if (skip_rest_of_patch) {
+  		say4("%d out of %d hunks ignored--saving rejects to %s\n",
+***************
+*** 351,357 ****
+  	revision = Nullch;
+      }
+  
+!     reverse = FALSE;
+      skip_rest_of_patch = FALSE;
+  
+      get_some_switches();
+--- 416,422 ----
+  	revision = Nullch;
+      }
+  
+!     reverse = reverse_flag_specified;
+      skip_rest_of_patch = FALSE;
+  
+      get_some_switches();
+***************
+*** 360,365 ****
+--- 425,438 ----
+  	fatal1("You may not change to a different patch file.\n");
+  }
+  
++ static char *
++ nextarg()
++ {
++     if (!--Argc)
++ 	fatal2("patch: missing argument after `%s'\n", *Argv);
++     return *++Argv;
++ }
++ 
+  /* Process switches and filenames up to next '+' or end of list. */
+  
+  void
+***************
+*** 379,415 ****
+  	}
+  	if (*s != '-' || !s[1]) {
+  	    if (filec == MAXFILEC)
+! 		fatal1("Too many file arguments.\n");
+  	    filearg[filec++] = savestr(s);
+  	}
+  	else {
+  	    switch (*++s) {
+  	    case 'b':
+! 		origext = savestr(Argv[1]);
+! 		Argc--,Argv++;
+  		break;
+  	    case 'B':
+! 		origprae = savestr(Argv[1]);
+! 		Argc--,Argv++;
+  		break;
+  	    case 'c':
+  		diff_type = CONTEXT_DIFF;
+  		break;
+  	    case 'd':
+! 		if (!*++s) {
+! 		    Argc--,Argv++;
+! 		    s = Argv[0];
+! 		}
+  		if (chdir(s) < 0)
+  		    fatal2("Can't cd to %s.\n", s);
+  		break;
+  	    case 'D':
+  	    	do_defines = TRUE;
+! 		if (!*++s) {
+! 		    Argc--,Argv++;
+! 		    s = Argv[0];
+! 		}
+! 		if (!isalpha(*s))
+  		    fatal1("Argument to -D not an identifier.\n");
+  		Sprintf(if_defined, "#ifdef %s\n", s);
+  		Sprintf(not_defined, "#ifndef %s\n", s);
+--- 452,482 ----
+  	}
+  	if (*s != '-' || !s[1]) {
+  	    if (filec == MAXFILEC)
+!  		fatal1("patch: Too many file arguments.\n");
+  	    filearg[filec++] = savestr(s);
+  	}
+  	else {
+  	    switch (*++s) {
+  	    case 'b':
+! 		origext = savestr(nextarg());
+  		break;
+  	    case 'B':
+! 		origprae = savestr(nextarg());
+  		break;
+  	    case 'c':
+  		diff_type = CONTEXT_DIFF;
+  		break;
+  	    case 'd':
+! 		if (!*++s)
+! 		    s = nextarg();
+  		if (chdir(s) < 0)
+  		    fatal2("Can't cd to %s.\n", s);
+  		break;
+  	    case 'D':
+  	    	do_defines = TRUE;
+! 		if (!*++s)
+! 		    s = nextarg();
+! 		if (!isalpha(*s) && '_' != *s)
+  		    fatal1("Argument to -D not an identifier.\n");
+  		Sprintf(if_defined, "#ifdef %s\n", s);
+  		Sprintf(not_defined, "#ifndef %s\n", s);
+***************
+*** 436,443 ****
+  		noreverse = TRUE;
+  		break;
+  	    case 'o':
+! 		outname = savestr(Argv[1]);
+! 		Argc--,Argv++;
+  		break;
+  	    case 'p':
+  		if (*++s == '=')
+--- 503,509 ----
+  		noreverse = TRUE;
+  		break;
+  	    case 'o':
+! 		outname = savestr(nextarg());
+  		break;
+  	    case 'p':
+  		if (*++s == '=')
+***************
+*** 445,455 ****
+  		strippath = atoi(s);
+  		break;
+  	    case 'r':
+! 		Strcpy(rejname, Argv[1]);
+! 		Argc--,Argv++;
+  		break;
+  	    case 'R':
+  		reverse = TRUE;
+  		break;
+  	    case 's':
+  		verbose = FALSE;
+--- 511,521 ----
+  		strippath = atoi(s);
+  		break;
+  	    case 'r':
+! 		Strcpy(rejname, nextarg());
+  		break;
+  	    case 'R':
+  		reverse = TRUE;
++ 		reverse_flag_specified = TRUE;
+  		break;
+  	    case 's':
+  		verbose = FALSE;
+***************
+*** 457,465 ****
+--- 523,538 ----
+  	    case 'S':
+  		skip_rest_of_patch = TRUE;
+  		break;
++ 	    case 'u':
++ 		diff_type = UNI_DIFF;
++ 		break;
+  	    case 'v':
+  		version();
+  		break;
++             case 'h':
++                 Usage();
++                 exit(0);
++ 		break;
+  #ifdef DEBUGGING
+  	    case 'x':
+  		debug = atoi(s+1);
+***************
+*** 468,473 ****
+--- 541,547 ----
+  	    default:
+                  /*fatal2("Unrecognized switch: %s\n", Argv[0]);*/
+                  printf("\nUnrecognized switch: %s.\n", Argv[0]);
++                 Usage();
+                  exit(1);
+                  break;
+  	    }
+***************
+*** 475,480 ****
+--- 549,582 ----
+      }
+  }
+  
++ 
++ Usage()
++ {
++   printf("\npatch 2.0, patchlevel %d\n", PATCHLEVEL);
++ 
++   printf("\nUsage: %s [options] orig patchfile [+ [options] orig]\n\n", myname);
++   printf("  -b   next argument is the extension to be used in place of '.orig'\n");
++   printf("  -c   forces patch to interpret the patch file as a context diff\n");
++   printf("  -d   next argument is a directory, cd to it before doing anything else\n");
++   printf("  -D   next argument is the symbol for '#ifdef...#endif' to mark changes\n");
++   printf("  -e   forces patch to interpret the patch file as an ed script\n");
++   printf("  -f   do not ask any questions\n");
++   printf("  -l   more loosely whitespace matching\n");
++   printf("  -n   forces patch to interpret the patch file as a normal diff\n");
++   printf("  -N   ignore patches that are reversed or already applied, see -R\n");
++   printf("  -o   next argument is the output file name\n");
++   printf("  -r   next argument is the reject file name\n");
++   printf("  -R   patch was created with the old and new files swapped\n");
++   printf("  -s   makes patch do its work silently, unless an error occurs\n");
++   printf("  -S   ignore this patch from the patch file\n");
++   printf("  -u   forces patch to interpret the patch file as a unified context diff\n");
++   printf("  -v   print out revision header and patch level\n\n");
++   printf("  -F<number>    maximum fuzz factor for context diffs (default 2)\n");
++   printf("  -p<number>    sets the pathname strip count\n");
++   printf("  -x<number>    set internal debugging flags\n");
++ }
++ 
++ 
+  /* Attempt to find the right place to apply this hunk of patch. */
+  
+  LINENUM
+***************
+*** 532,539 ****
+      LINENUM newfirst = pch_newfirst() + last_offset;
+      LINENUM oldlast = oldfirst + pch_ptrn_lines() - 1;
+      LINENUM newlast = newfirst + pch_repl_lines() - 1;
+!     char *stars = (diff_type == NEW_CONTEXT_DIFF ? " ****" : "");
+!     char *minuses = (diff_type == NEW_CONTEXT_DIFF ? " ----" : " -----");
+  
+      fprintf(rejfp, "***************\n");
+      for (i=0; i<=pat_end; i++) {
+--- 634,641 ----
+      LINENUM newfirst = pch_newfirst() + last_offset;
+      LINENUM oldlast = oldfirst + pch_ptrn_lines() - 1;
+      LINENUM newlast = newfirst + pch_repl_lines() - 1;
+!     char *stars = (diff_type >= NEW_CONTEXT_DIFF ? " ****" : "");
+!     char *minuses = (diff_type >= NEW_CONTEXT_DIFF ? " ----" : " -----");
+  
+      fprintf(rejfp, "***************\n");
+      for (i=0; i<=pat_end; i++) {
+***************
+*** 569,574 ****
+--- 671,699 ----
+  
+  /* We found where to apply it (we hope), so do it. */
+  
++ #ifdef MSDOS
++ static int fputs(const char *buffer, FILE *file)
++ {
++   const char *ptr;
++ 
++   for ( ptr = buffer; *ptr; ptr++ )
++     if ( *ptr == '\r' )
++     {
++       putc(*ptr, file);
++ 
++       if ( *(ptr + 1) == '\n' )
++         putc(*++ptr, file);
++     }
++     else if ( *ptr == '\n' )
++     {
++       putc('\r', file);
++       putc(*ptr, file);
++     }
++     else
++       putc(*ptr, file);
++ }
++ #endif
++ 
+  void
+  apply_hunk(where)
+  LINENUM where;
+***************
+*** 605,612 ****
+  	    last_frozen_line++;
+  	    old++;
+  	}
+! 	else if (new > pat_end)
+  	    break;
+  	else if (pch_char(new) == '+') {
+  	    copy_till(where + old - 1);
+  	    if (R_do_defines) {
+--- 730,738 ----
+  	    last_frozen_line++;
+  	    old++;
+  	}
+! 	else if (new > pat_end) {
+  	    break;
++ 	}
+  	else if (pch_char(new) == '+') {
+  	    copy_till(where + old - 1);
+  	    if (R_do_defines) {
+***************
+*** 622,629 ****
+  	    fputs(pfetch(new), ofp);
+  	    new++;
+  	}
+! 	else {
+! 	    if (pch_char(new) != pch_char(old)) {
+  	    say3("Out-of-sync patch, lines %ld,%ld--mangled text or line numbers, maybe?\n",
+  		pch_hunk_beg() + old,
+  		pch_hunk_beg() + new);
+--- 748,754 ----
+  	    fputs(pfetch(new), ofp);
+  	    new++;
+  	}
+! 	else if (pch_char(new) != pch_char(old)) {
+  	    say3("Out-of-sync patch, lines %ld,%ld--mangled text or line numbers, maybe?\n",
+  		pch_hunk_beg() + old,
+  		pch_hunk_beg() + new);
+***************
+*** 633,639 ****
+  #endif
+  	    my_exit(1);
+  	}
+! 	    if (pch_char(new) == '!') {
+  	    copy_till(where + old - 1);
+  	    if (R_do_defines) {
+  	       fputs(not_defined, ofp);
+--- 758,764 ----
+  #endif
+  	    my_exit(1);
+  	}
+! 	else if (pch_char(new) == '!') {
+  	    copy_till(where + old - 1);
+  	    if (R_do_defines) {
+  	       fputs(not_defined, ofp);
+***************
+*** 654,668 ****
+  		fputs(pfetch(new), ofp);
+  		new++;
+  	    }
+- 		if (R_do_defines) {
+- 		    fputs(end_defined, ofp);
+- 		    def_state = OUTSIDE;
+- 	}
+  	}
+  	else {
+  	    assert(pch_char(new) == ' ');
+  	    old++;
+  	    new++;
+  	    }
+  	}
+      }
+--- 779,792 ----
+  		fputs(pfetch(new), ofp);
+  		new++;
+  	    }
+  	}
+  	else {
+  	    assert(pch_char(new) == ' ');
+  	    old++;
+  	    new++;
++ 	    if (R_do_defines && def_state != OUTSIDE) {
++ 		fputs(end_defined, ofp);
++ 		def_state = OUTSIDE;
+  	    }
+  	}
+      }
+***************
+*** 694,700 ****
+  init_output(name)
+  char *name;
+  {
+!     ofp = fopen(name, "w");
+      if (ofp == Nullfp)
+  	fatal2("patch: can't create %s.\n", name);
+  }
+--- 818,824 ----
+  init_output(name)
+  char *name;
+  {
+!     ofp = fopen(name, "wb");
+      if (ofp == Nullfp)
+  	fatal2("patch: can't create %s.\n", name);
+  }
+***************
+*** 773,782 ****
+--- 897,925 ----
+  			 pch_line_len(pline) ))
+  		return FALSE;
+  	}
++ #ifdef MSDOS
++ 	else
++         {
++           char *s1, *s2;
++           int len;
++ 
++           s1 = ifetch(iline, (offset >= 0));
++           s2 = pfetch(pline);
++           len = pch_line_len(pline);
++ 
++           /* special CR/LF case */
++           if ( s1[len - 1] == '\r' && s1[len] == '\n' && s2[len - 1] == '\n' )
++             len--;
++ 
++           if (strnNE(s1, s2, len))
++ 	    return FALSE;
++         }
++ #else
+  	else if (strnNE(ifetch(iline, (offset >= 0)),
+  		   pfetch(pline),
+  		   pch_line_len(pline) ))
+  	    return FALSE;
++ #endif
+      }
+      return TRUE;
+  }
+***************
+*** 822,827 ****
+--- 965,976 ----
+      if (!trejkeep) {
+  	Unlink(TMPREJNAME);
+      }
++ 
++     if ( pfp != NULL )
++     {
++       Fclose(pfp);
+        Unlink(TMPPATNAME);
++     }
++ 
+      exit(status);
+  }
+diff -cbBw orig/pch.c patch2u/pch.c
+*** orig/pch.c	Mon Feb 18 18:55:42 1991
+--- patch2u/pch.c	Mon Feb 18 19:46:32 1991
+***************
+*** 1,6 ****
+--- 1,9 ----
+  /* $Header: pch.c,v 2.0.1.7 88/06/03 15:13:28 lwall Locked $
+   *
+   * $Log:	pch.c,v $
++  * Revision 2.0.2.0  90/05/01  22:17:51  davison
++  * patch12u: unidiff support added
++  *
+   * Revision 2.0.1.7  88/06/03  15:13:28  lwall
+   * patch10: Can now find patches in shar scripts.
+   * patch10: Hunks that swapped and then swapped back could core dump.
+***************
+*** 34,39 ****
+--- 37,43 ----
+  #include "util.h"
+  #include "INTERN.h"
+  #include "pch.h"
++ #include "version.h"
+  
+  /* Patch (diff listing) abstract type. */
+  
+***************
+*** 81,86 ****
+--- 85,96 ----
+  {
+      if (filename == Nullch || !*filename || strEQ(filename, "-"))
+      {
++         if ( isatty(fileno(stdin)) )
++         {
++           Usage();
++           exit(1);
++         }
++ 
+  	pfp = fopen(TMPPATNAME, "w");
+  	if (pfp == Nullfp)
+  	    fatal2("patch: can't create %s.\n", TMPPATNAME);
+***************
+*** 163,168 ****
+--- 173,179 ----
+      if (verbose)
+  	say3("  %sooks like %s to me...\n",
+  	    (p_base == 0L ? "L" : "The next patch l"),
++ 	    diff_type == UNI_DIFF ? "a unidiff" :
+  	    diff_type == CONTEXT_DIFF ? "a context diff" :
+  	    diff_type == NEW_CONTEXT_DIFF ? "a new-style context diff" :
+  	    diff_type == NORMAL_DIFF ? "a normal diff" :
+***************
+*** 266,271 ****
+--- 277,284 ----
+  	    oldtmp = savestr(s+4);
+  	else if (strnEQ(s, "--- ", 4))
+  	    newtmp = savestr(s+4);
++ 	else if (strnEQ(s, "+++ ", 4))
++ 	    oldtmp = savestr(s+4);	/* pretend it is the old name */
+  	else if (strnEQ(s, "Index:", 6))
+  	    indtmp = savestr(s+6);
+  	else if (strnEQ(s, "Prereq:", 7)) {
+***************
+*** 287,292 ****
+--- 300,314 ----
+  	    retval = ED_DIFF;
+  	    goto scan_exit;
+  	}
++ 	if ((!diff_type || diff_type == UNI_DIFF) && strnEQ(s, "@@ -", 4)) {
++ 	    if (!atol(s+3))
++ 		ok_to_create_file = TRUE;
++ 	    p_indent = indent;
++ 	    p_start = this_line;
++ 	    p_sline = p_input_line;
++ 	    retval = UNI_DIFF;
++ 	    goto scan_exit;
++ 	}
+  	stars_this_line = strnEQ(s, "********", 8);
+  	if ((!diff_type || diff_type == CONTEXT_DIFF) && stars_last_line &&
+  		 strnEQ(s, "*** ", 4)) {
+***************
+*** 408,413 ****
+--- 430,443 ----
+      p_input_line = file_line - 1;
+  }
+  
++ /* Make this a function for better debugging.  */
++ static void
++ malformed ()
++ {
++     fatal3("Malformed patch at line %ld: %s", p_input_line, buf);
++ 		/* about as informative as "Syntax error" in C */
++ }
++ 
+  /* True if there is more of the current diff listing to process. */
+  
+  bool
+***************
+*** 502,508 ****
+  		}
+  		for (s=buf; *s && !isdigit(*s); s++) ;
+  		if (!*s)
+! 		    goto malformed;
+  		if (strnEQ(s,"0,0",3))
+  		    strcpy(s,s+2);
+  		p_first = (LINENUM) atol(s);
+--- 532,538 ----
+  		}
+  		for (s=buf; *s && !isdigit(*s); s++) ;
+  		if (!*s)
+! 		    malformed();
+  		if (strnEQ(s,"0,0",3))
+  		    strcpy(s,s+2);
+  		p_first = (LINENUM) atol(s);
+***************
+*** 510,516 ****
+  		if (*s == ',') {
+  		    for (; *s && !isdigit(*s); s++) ;
+  		    if (!*s)
+! 			goto malformed;
+  		    p_ptrn_lines = ((LINENUM)atol(s)) - p_first + 1;
+  		}
+  		else if (p_first)
+--- 540,546 ----
+  		if (*s == ',') {
+  		    for (; *s && !isdigit(*s); s++) ;
+  		    if (!*s)
+! 			malformed();
+  		    p_ptrn_lines = ((LINENUM)atol(s)) - p_first + 1;
+  		}
+  		else if (p_first)
+***************
+*** 568,580 ****
+  		    p_char[p_end] = '=';
+  		    for (s=buf; *s && !isdigit(*s); s++) ;
+  		    if (!*s)
+! 			goto malformed;
+  		    p_newfirst = (LINENUM) atol(s);
+  		    while (isdigit(*s)) s++;
+  		    if (*s == ',') {
+  			for (; *s && !isdigit(*s); s++) ;
+  			if (!*s)
+! 			    goto malformed;
+  			p_repl_lines = ((LINENUM)atol(s)) - p_newfirst + 1;
+  		    }
+  		    else if (p_newfirst)
+--- 598,610 ----
+  		    p_char[p_end] = '=';
+  		    for (s=buf; *s && !isdigit(*s); s++) ;
+  		    if (!*s)
+! 			malformed();
+  		    p_newfirst = (LINENUM) atol(s);
+  		    while (isdigit(*s)) s++;
+  		    if (*s == ',') {
+  			for (; *s && !isdigit(*s); s++) ;
+  			if (!*s)
+! 			    malformed();
+  			p_repl_lines = ((LINENUM)atol(s)) - p_newfirst + 1;
+  		    }
+  		    else if (p_newfirst)
+***************
+*** 654,660 ****
+  		    repl_missing = TRUE;
+  		    goto hunk_done;
+  		}
+! 		goto malformed;
+  	    }
+  	    /* set up p_len for strncmp() so we don't have to */
+  	    /* assume null termination */
+--- 684,690 ----
+  		    repl_missing = TRUE;
+  		    goto hunk_done;
+  		}
+! 		malformed();
+  	    }
+  	    /* set up p_len for strncmp() so we don't have to */
+  	    /* assume null termination */
+***************
+*** 721,726 ****
+--- 751,900 ----
+  	    assert(filldst==p_end+1 || filldst==repl_beginning);
+  	}
+      }
++     else if (diff_type == UNI_DIFF) {
++ 	long line_beginning = ftell(pfp);
++ 					/* file pos of the current line */
++ 	Reg4 LINENUM fillsrc;		/* index of old lines */
++ 	Reg5 LINENUM filldst;		/* index of new lines */
++ 	char ch;
++ 
++ 	ret = pgets(buf, sizeof buf, pfp);
++ 	p_input_line++;
++ 	if (ret == Nullch || strnNE(buf, "@@ -", 4)) {
++ 	    next_intuit_at(line_beginning,p_input_line);
++ 	    return FALSE;
++ 	}
++ 	s = buf+4;
++ 	if (!*s)
++ 	    malformed ();
++ 	p_first = (LINENUM) atol(s);
++ 	while (isdigit(*s)) s++;
++ 	if (*s == ',') {
++ 	    p_ptrn_lines = (LINENUM) atol(++s);
++ 	    while (isdigit(*s)) s++;
++ 	} else
++ 	    p_ptrn_lines = 1;
++ 	if (*s == ' ') s++;
++ 	if (*s != '+' || !*++s)
++ 	    malformed ();
++ 	p_newfirst = (LINENUM) atol(s);
++ 	while (isdigit(*s)) s++;
++ 	if (*s == ',') {
++ 	    p_repl_lines = (LINENUM) atol(++s);
++ 	    while (isdigit(*s)) s++;
++ 	} else
++ 	    p_repl_lines = 1;
++ 	if (*s == ' ') s++;
++ 	if (*s != '@')
++ 	    malformed ();
++ 	if (!p_first && !p_ptrn_lines)
++ 	    p_first = 1;
++ 	p_max = p_ptrn_lines + p_repl_lines + 1;
++ 	while (p_max >= hunkmax)
++ 	    grow_hunkmax();
++ 	p_max = hunkmax;
++ 	fillsrc = 1;
++ 	filldst = fillsrc + p_ptrn_lines;
++ 	p_end = filldst + p_repl_lines;
++ 	Sprintf(buf,"*** %ld,%ld ****\n",p_first,p_first + p_ptrn_lines - 1);
++ 	p_line[0] = savestr(buf);
++ 	if (out_of_mem) {
++ 	    p_end = -1;
++ 	    return FALSE;
++ 	}
++ 	p_char[0] = '*';
++         Sprintf(buf,"--- %ld,%ld ----\n",p_newfirst,p_newfirst+p_repl_lines-1);
++ 	p_line[filldst] = savestr(buf);
++ 	if (out_of_mem) {
++ 	    p_end = 0;
++ 	    return FALSE;
++ 	}
++ 	p_char[filldst++] = '=';
++ 	p_context = 100;
++ 	context = 0;
++ 	p_hunk_beg = p_input_line + 1;
++ 	while (fillsrc <= p_ptrn_lines || filldst <= p_end) {
++ 	    line_beginning = ftell(pfp);
++ 	    ret = pgets(buf, sizeof buf, pfp);
++ 	    p_input_line++;
++ 	    if (ret == Nullch) {
++ 		if (p_max - filldst < 3)
++ 		    Strcpy(buf, " \n");  /* assume blank lines got chopped */
++ 		else {
++ 		    fatal1("Unexpected end of file in patch.\n");
++ 		}
++ 	    }
++ 	    if (*buf == '\t' || *buf == '\n') {
++ 		ch = ' ';		/* assume the space got eaten */
++ 		s = savestr(buf);
++ 	    }
++ 	    else {
++ 		ch = *buf;
++ 		s = savestr(buf+1);
++ 	    }
++ 	    if (out_of_mem) {
++ 		while (--filldst > p_ptrn_lines)
++ 		    free(p_line[filldst]);
++ 		p_end = fillsrc-1;
++ 		return FALSE;
++ 	    }
++ 	    switch (ch) {
++ 	    case '-':
++ 		if (fillsrc > p_ptrn_lines) {
++ 		    free(s);
++ 		    p_end = filldst-1;
++ 		    malformed ();
++ 		}
++ 		p_char[fillsrc] = ch;
++ 		p_line[fillsrc] = s;
++ 		p_len[fillsrc++] = strlen(s);
++ 		break;
++ 	    case '=':
++ 		ch = ' ';
++ 		/* FALL THROUGH */
++ 	    case ' ':
++ 		if (fillsrc > p_ptrn_lines) {
++ 		    free(s);
++ 		    while (--filldst > p_ptrn_lines)
++ 			free(p_line[filldst]);
++ 		    p_end = fillsrc-1;
++ 		    malformed ();
++ 		}
++ 		context++;
++ 		p_char[fillsrc] = ch;
++ 		p_line[fillsrc] = s;
++ 		p_len[fillsrc++] = strlen(s);
++ 		s = savestr(s);
++ 		if (out_of_mem) {
++ 		    while (--filldst > p_ptrn_lines)
++ 			free(p_line[filldst]);
++ 		    p_end = fillsrc-1;
++ 		    return FALSE;
++ 		}
++ 		/* FALL THROUGH */
++ 	    case '+':
++ 		if (filldst > p_end) {
++ 		    free(s);
++ 		    while (--filldst > p_ptrn_lines)
++ 			free(p_line[filldst]);
++ 		    p_end = fillsrc-1;
++ 		    malformed ();
++ 		}
++ 		p_char[filldst] = ch;
++ 		p_line[filldst] = s;
++ 		p_len[filldst++] = strlen(s);
++ 		break;
++ 	    default:
++ 		p_end = filldst;
++ 		malformed ();
++ 	    }
++ 	    if (ch != ' ' && context > 0) {
++ 		if (context < p_context)
++ 		    p_context = context;
++ 		context = -1000;
++ 	    }
++ 	}/* while */
++     }
+      else {				/* normal diff--fake it up */
+  	char hunk_type;
+  	Reg3 int i;
+***************
+*** 793,799 ****
+  	    if (*buf != '-')
+  		fatal2("--- expected at line %ld of patch.\n", p_input_line);
+  	}
+!         Sprintf(buf, "--- %ld,%ld\n", min, max);
+  	p_line[i] = savestr(buf);
+  	if (out_of_mem) {
+  	    p_end = i-1;
+--- 967,973 ----
+  	    if (*buf != '-')
+  		fatal2("--- expected at line %ld of patch.\n", p_input_line);
+  	}
+!         Sprintf(buf, "--- %ld,%ld\n", (long) min, (long) max);
+  	p_line[i] = savestr(buf);
+  	if (out_of_mem) {
+  	    p_end = i-1;
+***************
+*** 838,848 ****
+      if (p_end+1 < hunkmax)	/* paranoia reigns supreme... */
+  	p_char[p_end+1] = '^';  /* add a stopper for apply_hunk */
+      return TRUE;
+- 
+- malformed:
+-     fatal3("Malformed patch at line %ld: %s", p_input_line, buf);
+- 		/* about as informative as "Syntax error" in C */
+-     return FALSE;	/* for lint */
+  }
+  
+  /* Input a line from the patch file, worrying about indentation. */
+--- 1012,1017 ----
+***************
+*** 1073,1082 ****
+--- 1242,1258 ----
+      if (!skip_rest_of_patch) {
+  	Unlink(TMPOUTNAME);
+          copy_file(filearg[0], TMPOUTNAME);
++ #ifdef MSDOS
++ 	if (verbose)
++             Sprintf(buf, "ed %s", TMPOUTNAME);
++ 	else
++             Sprintf(buf, "ed - %s", TMPOUTNAME);
++ #else
+  	if (verbose)
+  	    Sprintf(buf, "/bin/ed %s", TMPOUTNAME);
+  	else
+              Sprintf(buf, "/bin/ed - %s", TMPOUTNAME);
++ #endif
+  	pipefp = popen(buf, "w");
+      }
+      for (;;) {
+diff -cbBw orig/util.c patch2u/util.c
+*** orig/util.c	Mon Feb 18 18:55:48 1991
+--- patch2u/util.c	Mon Feb 18 19:37:12 1991
+***************
+*** 5,10 ****
+--- 5,13 ----
+  
+  /* Rename a file, copying it if necessary. */
+  
++ char *strchr();
++ char *strrchr();
++ 
+  int
+  move_file(from,to)
+  char *from, *to;
+***************
+*** 21,27 ****
+  	if (debug & 4)
+  	    say2("Moving %s to stdout.\n", from);
+  #endif
+! 	fromfd = open(from, 0);
+  	if (fromfd < 0)
+  	    fatal2("patch: internal error, can't reopen %s\n", from);
+  	while ((i=read(fromfd, buf, sizeof buf)) > 0)
+--- 24,30 ----
+  	if (debug & 4)
+  	    say2("Moving %s to stdout.\n", from);
+  #endif
+!         fromfd = open(from, O_RDONLY|O_BINARY);
+  	if (fromfd < 0)
+  	    fatal2("patch: internal error, can't reopen %s\n", from);
+  	while ((i=read(fromfd, buf, sizeof buf)) > 0)
+***************
+*** 36,43 ****
+--- 39,61 ----
+          Strcat(bakname, to);
+      } else {
+          Strcpy(bakname, to);
++ #ifdef MSDOS
++         s = strchr(bakname, 0);
++ #endif
+          Strcat(bakname, origext?origext:ORIGEXT);
++ #ifdef MSDOS
++         if ( !IsFileNameValid(bakname) )
++         {
++           *s=0;
++ 
++           if ((s=strrchr(bakname,'.'))!=NULL)
++             *s=0;
++ 
++           strcat(bakname, ".org");
++         }
++ #endif
+      }
++ 
+      if (stat(to, &filestat) >= 0) {	/* output file exists */
+  	dev_t to_device = filestat.st_dev;
+  	ino_t to_inode  = filestat.st_ino;
+***************
+*** 44,50 ****
+--- 62,72 ----
+  	char *simplename = bakname;
+  	
+          for (s=bakname; *s; s++) {
++ #ifdef MSDOS
++             if (*s == '/' || *s == '\\')
++ #else
+              if (*s == '/')
++ #endif
+  		simplename = s+1;
+  	}
+  	/* find a backup name that is not the same file */
+***************
+*** 63,75 ****
+--- 85,106 ----
+  	if (debug & 4)
+  	    say3("Moving %s to %s.\n", to, bakname);
+  #endif
++ 
++ #ifdef MSDOS
++         if (rename(to, bakname) < 0) {
++ #else
+  	if (link(to, bakname) < 0) {
++ #endif
+  	    say3("patch: can't backup %s, output is in %s\n",
+  		to, from);
+  	    return -1;
+  	}
++ 
++ #ifndef MSDOS
+  	while (unlink(to) >= 0) ;
++ #endif
+      }
++ 
+  #ifdef DEBUGGING
+      if (debug & 4)
+  	say3("Moving %s to %s.\n", from, to);
+***************
+*** 74,89 ****
+      if (debug & 4)
+  	say3("Moving %s to %s.\n", from, to);
+  #endif
+      if (link(from, to) < 0) {		/* different file system? */
+  	Reg4 int tofd;
+  	
+! 	tofd = creat(to, 0666);
+  	if (tofd < 0) {
+  	    say3("patch: can't create %s, output is in %s.\n",
+  	      to, from);
+  	    return -1;
+  	}
+! 	fromfd = open(from, 0);
+  	if (fromfd < 0)
+  	    fatal2("patch: internal error, can't reopen %s\n", from);
+  	while ((i=read(fromfd, buf, sizeof buf)) > 0)
+--- 105,126 ----
+      if (debug & 4)
+  	say3("Moving %s to %s.\n", from, to);
+  #endif
++ 
++ #ifdef MSDOS
++     if (rename(from, to) < 0) {           /* different file system? */
++ #else
+      if (link(from, to) < 0) {		/* different file system? */
++ #endif
+  	Reg4 int tofd;
+  	
+!         tofd = open(to, O_WRONLY|O_CREAT|O_TRUNC|O_BINARY,S_IWRITE|S_IREAD);
+  	if (tofd < 0) {
+  	    say3("patch: can't create %s, output is in %s.\n",
+  	      to, from);
+  	    return -1;
+  	}
+! 
+!         fromfd = open(from, O_RDONLY|O_BINARY);
+  	if (fromfd < 0)
+  	    fatal2("patch: internal error, can't reopen %s\n", from);
+  	while ((i=read(fromfd, buf, sizeof buf)) > 0)
+***************
+*** 91,98 ****
+--- 128,140 ----
+  		fatal1("patch: write failed\n");
+  	Close(fromfd);
+  	Close(tofd);
++ #ifdef MSDOS
++     Unlink(from);
+      }
++ #else
++     }
+      Unlink(from);
++ #endif
+      return 0;
+  }
+  
+***************
+*** 106,115 ****
+      Reg2 int fromfd;
+      Reg1 int i;
+   
+!     tofd = creat(to, 0666);
+      if (tofd < 0)
+  	fatal2("patch: can't create %s.\n", to);
+!     fromfd = open(from, 0);
+      if (fromfd < 0)
+  	fatal2("patch: internal error, can't reopen %s\n", from);
+      while ((i=read(fromfd, buf, sizeof buf)) > 0)
+--- 148,157 ----
+      Reg2 int fromfd;
+      Reg1 int i;
+   
+!     tofd = open(to, O_WRONLY|O_CREAT|O_TRUNC|O_BINARY,S_IWRITE|S_IREAD);
+      if (tofd < 0)
+  	fatal2("patch: can't create %s.\n", to);
+!     fromfd = open(from, O_RDONLY|O_BINARY);
+      if (fromfd < 0)
+  	fatal2("patch: internal error, can't reopen %s\n", from);
+      while ((i=read(fromfd, buf, sizeof buf)) > 0)
+***************
+*** 159,164 ****
+--- 201,232 ----
+  
+  /* Vanilla terminal output (buffered). */
+  
++ #ifdef MSDOS
++ #include <stdarg.h>
++ 
++ void say(char *pat,...)
++ {
++     va_list argptr;
++ 
++     va_start(argptr, pat);
++     vfprintf(stderr, pat, argptr);
++     va_end(argptr);
++     Fflush(stderr);
++ }
++ 
++ void fatal(char *pat,...)
++ {
++     void my_exit();
++     va_list argptr;
++ 
++     va_start(argptr, pat);
++     vfprintf(stderr, pat, argptr);
++     va_end(argptr);
++     Fflush(stderr);
++     my_exit(1);
++ }
++ 
++ #else
+  void
+  say(pat,arg1,arg2,arg3)
+  char *pat;
+***************
+*** 180,188 ****
+--- 248,269 ----
+      say(pat, arg1, arg2, arg3);
+      my_exit(1);
+  }
++ #endif
+  
+  /* Get a response from the user, somehow or other. */
+  
++ #ifdef MSDOS
++ void ask(char *pat,...)
++ {
++     int ttyfd;
++     int r;
++     bool tty2 = isatty(2);
++     va_list argptr;
++ 
++     va_start(argptr, pat);
++     vsprintf(buf, pat, argptr);
++     va_end(argptr);
++ #else
+  void
+  ask(pat,arg1,arg2,arg3)
+  char *pat;
+***************
+*** 193,198 ****
+--- 274,280 ----
+      bool tty2 = isatty(2);
+  
+      Sprintf(buf, pat, arg1, arg2, arg3);
++ #endif
+      Fflush(stderr);
+      write(2, buf, strlen(buf));
+      if (tty2) {				/* might be redirected to a file */
+***************
+*** 203,209 ****
+  	write(1, buf, strlen(buf));
+  	r = read(1, buf, sizeof buf);
+      }
+!     else if ((ttyfd = open("/dev/tty", 2)) >= 0 && isatty(ttyfd)) {
+  					/* might be deleted or unwriteable */
+  	write(ttyfd, buf, strlen(buf));
+  	r = read(ttyfd, buf, sizeof buf);
+--- 285,295 ----
+  	write(1, buf, strlen(buf));
+  	r = read(1, buf, sizeof buf);
+      }
+! #ifdef MSDOS
+!     else if ((ttyfd = open("con", O_RDWR)) >= 0 && isatty(ttyfd)) {
+! #else
+!     else if ((ttyfd = open("/dev/tty", O_RDWR)) >= 0 && isatty(ttyfd)) {
+! #endif
+  					/* might be deleted or unwriteable */
+  	write(ttyfd, buf, strlen(buf));
+  	r = read(ttyfd, buf, sizeof buf);
+***************
+*** 242,247 ****
+--- 328,334 ----
+  #endif
+  
+      if (!reset) {
++ #ifndef MSDOS
+  	hupval = signal(SIGHUP, SIG_IGN);
+  	if (hupval != SIG_IGN)
+  #ifdef VOIDSIG
+***************
+*** 249,254 ****
+--- 336,342 ----
+  #else
+  	    hupval = (int(*)())my_exit;
+  #endif
++ #endif
+  	intval = signal(SIGINT, SIG_IGN);
+  	if (intval != SIG_IGN)
+  #ifdef VOIDSIG
+***************
+*** 257,263 ****
+--- 345,353 ----
+  	    intval = (int(*)())my_exit;
+  #endif
+      }
++ #ifndef MSDOS
+      Signal(SIGHUP, hupval);
++ #endif
+      Signal(SIGINT, intval);
+  #endif
+  }
+***************
+*** 268,274 ****
+--- 358,366 ----
+  ignore_signals()
+  {
+  #ifndef lint
++ #ifndef MSDOS
+      Signal(SIGHUP, SIG_IGN);
++ #endif
+      Signal(SIGINT, SIG_IGN);
+  #endif
+  }
+***************
+*** 287,293 ****
+--- 379,389 ----
+      Reg4 int dirvp = 0;
+  
+      while (*filename) {
++ #ifdef MSDOS
++         if (*filename == '/' || *filename == '\\') {
++ #else
+          if (*filename == '/') {
++ #endif
+  	    filename++;
+  	    dirv[dirvp++] = s;
+  	    *s++ = '\0';
+***************
+*** 338,348 ****
+--- 434,452 ----
+      if (strnEQ(name, "/dev/null", 9))	/* so files can be created by diffing */
+  	return Nullch;			/*   against /dev/null. */
+      for (; *t && !isspace(*t); t++)
++ #ifdef MSDOS
++         if (*t == '/' || *t == '\\')
++ #else
+          if (*t == '/')
++ #endif
+  	    if (--strip_leading >= 0)
+  		name = t+1;
+      *t = '\0';
++ #ifdef MSDOS
++     if (name != s && *s != '/' && *s != '\\') {
++ #else
+      if (name != s && *s != '/') {
++ #endif
+  	name[-1] = '\0';
+  	if (stat(s, &filestat) && filestat.st_mode & S_IFDIR) {
+  	    name[-1] = '/';
+***************
+*** 364,366 ****
+--- 468,525 ----
+      }
+      return name;
+  }
++ 
++ 
++ #ifdef MSDOS
++ 
++ /* only one pipe can be open at a time */
++ 
++ static char pipename[128], command[128];
++ static int wrpipe;
++ 
++ FILE *popen(char *cmd, char *flags)
++ {
++   wrpipe = (strchr(flags, 'w') != NULL);
++ 
++   if ( wrpipe )
++   {
++     strcpy(command, cmd);
++     strcpy(pipename, "~WXXXXXX");
++     Mktemp(pipename);
++     return fopen(pipename, flags);  /* ordinary file */
++   }
++   else
++   {
++     strcpy(pipename, "~RXXXXXX");
++     Mktemp(pipename);
++     strcpy(command, cmd);
++     strcat(command, ">");
++     strcat(command, pipename);
++     system(command);
++     return fopen(pipename, flags);  /* ordinary file */
++   }
++ }
++ 
++ int pclose(FILE *pipe)
++ {
++   int rc;
++ 
++   if ( fclose(pipe) == EOF )
++     return EOF;
++ 
++   if ( wrpipe )
++   {
++     strcat(command, "<");
++     strcat(command, pipename);
++     rc = system(command);
++     unlink(pipename);
++     return rc;
++   }
++   else
++   {
++     unlink(pipename);
++     return 0;
++   }
++ }
++ 
++ #endif
+diff -cbBw orig/version.c patch2u/version.c
+*** orig/version.c	Mon Feb 18 18:55:50 1991
+--- patch2u/version.c	Fri Sep 07 21:03:48 1990
+***************
+*** 10,16 ****
+  #include "common.h"
+  #include "util.h"
+  #include "INTERN.h"
+! #include "patchlevel.h"
+  #include "version.h"
+  
+  /* Print out the version number and die. */
+--- 10,16 ----
+  #include "common.h"
+  #include "util.h"
+  #include "INTERN.h"
+! #include "patchlev.h"
+  #include "version.h"
+  
+  /* Print out the version number and die. */
+***************
+*** 23,28 ****
+  #ifdef lint
+      rcsid[0] = rcsid[0];
+  #else
+!     fatal3("\n%s\nPatch level: %d\n", rcsid, PATCHLEVEL);
+  #endif
+  }
+--- 23,28 ----
+  #ifdef lint
+      rcsid[0] = rcsid[0];
+  #else
+!     fatal3("\n%s\nPatch level: %d, with unidiff support, for DOS and OS/2\n", rcsid, PATCHLEVEL);
+  #endif
+  }
